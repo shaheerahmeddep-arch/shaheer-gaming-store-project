@@ -3,14 +3,8 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "installCommand": "pip install -r requirements.txt && npm install",
-  "functions": {
-    "api/index.py": {
-      "runtime": "@vercel/python@5.2.0",
-      "maxDuration": 30,
       "includeFiles": "backend/**"
-    }
-  },
+  "installCommand": "npm install && pip install -r backend/requirements.txt",
   "rewrites": [
     {
       "source": "/api/(.*)",
@@ -31,26 +25,6 @@
     {
       "source": "/(.*)",
       "destination": "/index.html"
-    }
-  ],
-  "headers": [
-    {
-      "source": "/media/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
-    },
-    {
-      "source": "/assets/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
     }
   ]
 }
