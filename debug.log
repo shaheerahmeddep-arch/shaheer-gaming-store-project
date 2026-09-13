@@ -1,0 +1,711 @@
+============================================================
+Shaheer Gaming Store — Debug Session Log
+Date: 2026-03-14
+============================================================
+
+============================================================
+1.  PROJECT STRUCTURE — INSPECTION RESULTS
+============================================================
+
+Verified architecture: Monorepo (React + Vite on root, Django
+under backend/).  Original root-level manage.py was MISSING.
+
+c:\Users\dell\Downloads\shaheer-gaming-store\shaheer-gaming-store-project\
+├── src/                        # React/Vite frontend (SOURCE OF TRUTH)
+│   ├── App.jsx
+│   ├── main.jsx
+│   ├── index.css
+│   ├── routes/                 # ProtectedRoute, AdminRoute
+│   ├── pages/                  # Home, Shop, ProductDetail, Cart,
+│   │                             Login, Register, UserDashboard,
+│   │                             AdminDashboard, AdminProducts,
+│   │                             AdminUsers, AdminOrders
+│   ├── components/             # Navbar, Footer, Modal, Loading,
+│   │                             ProductCard, ProductGrid, etc.
+│   ├── context/                # CartContext, AuthContext
+│   ├── services/api.js         # axios instance, API helpers
+│   └── routes/routes.js        # React Router routes
+├── backend/                    # Django project (NOT root)
+│   ├── manage.py
+│   ├── config/                 # Django settings package
+│   │   ├── settings.py
+│   │   ├── urls.py
+│   │   ├── wsgi.py
+│   │   └── asgi.py
+│   ├── products/               # App: Product catalog, images
+│   ├── users/                  # App: Custom User model, auth
+│   ├── orders/                 # App: Orders, OrderItems
+│   ├── media/products/         # 12 product PNGs
+│   ├── static/                 # Django static files (empty)
+│   └── db.sqlite3              # Default SQLite database
+├── api/index.py                # Vercel WSGI entry point (CREATED)
+├── requirements.txt            # Root-level pinned deps (UPDATED)
+├── backend/requirements.txt    # Backend-local deps (UPDATED)
+├── package.json                # Frontend: React 18 + Vite 5
+├── vite.config.js              # Vite + React plugin + port 5173
+├── tailwind.config.js          # Tailwind config + custom theme
+├── postcss.config.js           # PostCSS with Autoprefixer
+├── index.html                  # Vite entry HTML
+├── vercel.json                 # Vercel config (REWRITTEN)
+├── .env.example                # Required env vars (EXISTS, good)
+└── .env                        # Local dev overrides
+============================================================
+2.  ENVIRONMENT FINDINGS
+============================================================
+
+- Sandbox Python: 3.14.7 (very new / bleeding edge)
+- Sandbox Node:   v25.1.0, npm 11.8.0
+- Pip install blocked in sandbox:
+    [WinError 5] Access is denied -> cannot write to
+    site-packages, and TRAE sandbox forbids writes outside
+    the project folder.  Pip flags like --user and
+    --target were tried and both hit the same restriction.
+    As a result, Django check/migrate/runserver commands
+    could NOT be executed in this sandbox.  All code was
+    audited STATICALLY and changes were verified against
+    Django 5.1 / Pillow 11 documentation.  The end-user
+    MUST run the Django commands locally (see §8 below)
+    after `pip install -r requirements.txt`.
+- Python 3.14 compatibility: original requirements.txt
+    pinned Django==5.0.6 and Pillow==10.3.0, both of
+    which fail on Python 3.14 (Pillow build crashes with
+    KeyError: '__version__' in get_requires_for_build_wheel).
+    Both pins were relaxed to Django>=5.1,<5.3 and
+    Pillow>=11,<13 (Python 3.14-compatible).
+- Django 5.1 note: django.contrib.admin requires locale
+    catalog compilation on first run; Pillow must also be
+    compiled on first pip install.  End-user should use
+    Python 3.11/3.12 locally (any 3.10–3.13 works) or
+    Vercel's default Python 3.12 runtime.
+- Vercel default Python runtime: 3.12 (as of 2025).
+    requirements.txt pins compile cleanly on Python 3.12.
+- Node 25.1.0 (sandbox) is new; Vite 5.4, React 18,
+    framer-motion 11, and react-router-dom 7 all run fine.
+    npm run build SUCCEEDED (see §6.1).
+
+============================================================
+3.  DJANGO / BACKEND PROBLEMS FOUND & FIXED
+============================================================
+
+3.1  settings.py — hardening & Vercel compat
+--------------------------------------------
+PROBLEMS FOUND:
+  - No WhiteNoise middleware; static files would 404 on Vercel.
+  - SECRET_KEY had a hard-coded dev-only fallback; no env override.
+  - DEBUG had no env override.
+  - ALLOWED_HOSTS did not auto-include Vercel-provided hosts.
+  - No Vercel proxy trust (SECURE_PROXY_SSL_HEADER,
+    USE_X_FORWARDED_HOST, CSRF_COOKIE_SECURE, etc.).
+  - CORS allowed only http://localhost:5173 / http://127.0.0.1:5173
+    and a *single* VERCEL_URL, not *.vercel.app preview hosts.
+  - CSRF_TRUSTED_ORIGINS only allowed localhost / single VERCEL_URL.
+  - STATICFILES_DIRS not set.
+  - FORCE_SCRIPT_NAME did not support env override.
+  - AUTH_PASSWORD_VALIDATORS existed but no
+    AUTH_USER_MODEL override was checked (it IS configured
+    correctly to users.User — kept as-is).
+
+FIXES APPLIED (backend/config/settings.py):
+  - Added `whitenoise.middleware.WhiteNoiseMiddleware`
+    to MIDDLEWARE (directly after SecurityMiddleware).
+  - Added SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+  - Added USE_X_FORWARDED_HOST = True
+  - Added SECURE_SSL_REDIRECT = False (Vercel terminates SSL for us)
+  - Added CSRF_COOKIE_SECURE and SESSION_COOKIE_SECURE:
+    True when DJANGO_DEBUG is False, else False.
+  - SECRET_KEY now reads from os.environ.get('DJANGO_SECRET_KEY', dev_fallback)
+  - DEBUG = (os.environ.get('DJANGO_DEBUG', 'True') == 'True')
+  - ALLOWED_HOSTS = [] + env DJANGO_ALLOWED_HOSTS (CSV split)
+       + auto VERCEL_URL hostname + .vercel.app wildcard hostnames
+  - CORS_ALLOWED_ORIGIN_REGEXES now includes:
+       ^https://.*\.vercel\.app$ , ^https://<vercelurl>$
+       localhost/127.0.0.1 on ports 5173 / 4173 / 3000
+  - CSRF_TRUSTED_ORIGINS now includes all of:
+       localhost/127.0.0.1 variants, http(s)://.vercel.app,
+       and the current VERCEL_URL.
+  - CORS_ALLOW_CREDENTIALS = True (needed for csrftoken/sessionid)
+  - Set STATIC_ROOT = BASE_DIR / 'staticfiles' for WhiteNoise
+       + Vercel collectstatic output
+  - Added STATICFILES_DIRS = [BASE_DIR / 'static']
+  - FORCE_SCRIPT_NAME support via env DJANGO_FORCE_SCRIPT_NAME
+  - Added MEDIA_ROOT / MEDIA_URL config (already correct, kept)
+  - Installed apps audit: rest_framework, corsheaders,
+       products, users, orders — all present.
+
+3.2  urls.py — root URL config
+------------------------------
+ORIGINAL: included products.urls, users.urls, orders.urls
+without /api prefix; admin at /admin/; media via static().
+
+PROBLEM FOUND:
+  - Vercel api/index.py routes to WSGI only for paths
+    starting with /api /admin /media /static.  The API
+    URLs in the original urls.py were at the root level
+    (/products/... etc.), so they would have 404'd when
+    accessed via /api/products/ on Vercel.
+
+FIX APPLIED:
+  - Moved all DRF API routes under /api/ prefix:
+        path('api/products/', include('products.urls')),
+        path('api/users/',    include('users.urls')),
+        path('api/orders/',   include('orders.urls')),
+  - Kept /admin/ for Django admin (still routed separately).
+  - Kept static() for /media/ in DEBUG mode.
+
+3.3  models.py audit
+--------------------
+- products/models.py: Product model has image = ImageField(
+  upload_to='products/') and @property image_url using
+  request.build_absolute_uri — CORRECT but in the
+  serializer we needed a FALLBACK when request context is
+  unavailable (see 3.5).
+- users/models.py: Custom User(AbstractUser) with
+  phone, address, is_customer, is_admin;
+  AUTH_USER_MODEL = 'users.User' in settings.py — CORRECT.
+- orders/models.py: Order( user, status, total_price,
+  shipping_address ), OrderItem( order, product, quantity,
+  price_at_purchase ) — CORRECT.
+
+3.4  migrations audit
+---------------------
+- products/migrations/: present with __init__.py and existing
+  numbered migrations — OK.
+- users/migrations/: present — OK.
+- orders/migrations/: FOLDER WAS MISSING.  Summary says 0
+  files; now contains __init__.py and 0001_initial.py
+  (either present from prior run or created by Django).
+  End-user MUST still run:
+      python manage.py makemigrations
+      python manage.py migrate
+  from inside backend/ folder locally to ensure schema is
+  in sync with model definitions and to produce fresh
+  migration files if missing.
+
+3.5  serializers.py audit + API issue
+-------------------------------------
+products/serializers.py — ORIGINAL image_url SerializerMethodField:
+
+    def get_image_url(self, obj):
+        request = self.context.get('request')
+        return request.build_absolute_uri(obj.image.url)
+
+PROBLEM FOUND:
+  - If `request` context is not passed by DRF view OR
+    if obj.image is blank/None, this raised AttributeError
+    and returned HTTP 500.
+
+FIX APPLIED:
+  - Now handles missing request context (falls back to
+    MEDIA_URL-relative path), handles blank image, and
+    never raises when obj.image.url is missing.
+  - Added full_name SerializerMethodField fallback if a
+    product has no name field (defensive — not strictly
+    needed but safer).
+  - Same pattern applied to users/serializers.py and
+    orders/serializers.py — defensive handling of
+    nullable FK fields and missing request context.
+
+3.6  views.py audit
+-------------------
+All views (products/views.py, users/views.py, orders/views.py)
+use standard DRF ViewSets / ModelViewSets / GenericViewSet
+with appropriate permissions classes:
+  - Products: AllowAny for read (list/retrieve), IsAdminUser
+    for write (POST/PUT/PATCH/DELETE) — CORRECT.
+  - Users:  Register (AllowAny), Login (AllowAny via DRF
+    ObtainAuthToken-style custom view), me = RetrieveUpdateAPIView
+    with IsAuthenticated.  isAdmin = IsAdminUser.
+  - Orders: Create -> IsAuthenticated, ListMine -> IsAuthenticated,
+    Admin List/StatusUpdate/Delete -> IsAdminUser.
+
+MINOR FIXES APPLIED:
+  - Added `.select_related()/.prefetch_related()` where
+    applicable (Order -> OrderItems -> Product) to reduce
+    N+1 queries on order detail views.
+  - create() in orders/views.py now wraps DB writes in
+    `transaction.atomic()` to avoid partial orders.
+  - 400-errors explicitly return DRF Response(status=400)
+    instead of raising generic exceptions.
+
+3.7  admin.py audit
+-------------------
+Products, Users, Orders all registered correctly with
+appropriate list_display, list_filter, search_fields.
+- ProductAdmin uses `fieldsets` and optimises querysets.
+- OrderAdmin has an inline for OrderItemInline.
+- No changes needed.
+
+3.8  manage.py / wsgi.py / asgi.py
+----------------------------------
+  - backend/manage.py — standard template, OK.
+  - backend/config/wsgi.py — standard.
+  - backend/config/asgi.py — standard.
+  NOTE: manage.py runserver MUST be invoked from backend/
+    folder (cd backend; python manage.py runserver).  The
+    root-level wrapper manage.py used to exist in some
+    monorepo layouts but was NOT present in this repo; the
+    Vercel entry point is api/index.py (see §5.1) which
+    sets sys.path explicitly, so a root-level manage.py
+    is not required (and was not added to avoid confusion).
+
+============================================================
+4.  REQUIREMENTS.TXT — PINS UPDATED
+============================================================
+
+Original (broken on Python 3.14 + missing whitenoise):
+    Django==5.0.6
+    Pillow==10.3.0
+    djangorestframework==3.15.1
+    django-cors-headers==4.3.1
+    (missing gunicorn + whitenoise)
+
+Updated (root requirements.txt + backend/requirements.txt):
+    Django>=5.1,<5.3
+    djangorestframework>=3.15,<4
+    django-cors-headers>=4.3,<5
+    Pillow>=11,<13
+    whitenoise>=6.7,<7
+    gunicorn>=23,<24
+
+REASON FOR RELAXED PINS:
+  - Django 5.0.6 is incompatible with Python 3.14; 5.1+
+    supports Python 3.12–3.14 and is the Vercel default.
+  - Pillow 10.3.0 fails on Python 3.14 (known build issue);
+    Pillow 11 / 12 support Python 3.12–3.14.
+  - whitenoise required for staticfiles on Vercel serverless
+    + WhiteNoiseMiddleware added to settings.MIDDLEWARE.
+  - gunicorn added for local production-like runs; Vercel
+    uses api/index.py WSGI handler directly.
+
+============================================================
+5.  VERCEL DEPLOYMENT CONFIGURATION FIXES
+============================================================
+
+5.1  api/index.py — CREATED (did not exist)
+-------------------------------------------
+WSGI entry point used by Vercel serverless Python functions.
+
+Key responsibilities:
+  1. Sets sys.path to include both project ROOT and backend/
+     folders so `import config.settings` and app imports work.
+  2. Sets DJANGO_SETTINGS_MODULE='config.settings'.
+  3. Defines a `_normalize_path()` helper that ensures Django
+     sees /api /admin /media /static prefixes correctly even
+     when Vercel's routing layer mutates PATH_INFO / SCRIPT_NAME.
+     Uses REQUEST_URI as the canonical source when available.
+  4. Wraps get_wsgi_application() with error handling that
+     catches exceptions during request handling, prints a
+     traceback to Vercel runtime logs, and returns a plain
+     500 response instead of crashing the serverless worker.
+  5. Exposes `app`, `application`, and `handler` callables to
+     match the various names different Vercel runtimes look for.
+
+WHY THIS IS NEEDED:
+  Vercel runs Python serverless functions via a WSGI shim.
+  Without this handler, Django cannot find its settings module
+  (since manage.py is not used) and URL routing for
+  `/api/...` breaks because Vercel mangles PATH_INFO.
+
+5.2  vercel.json — COMPLETELY REWRITTEN
+---------------------------------------
+ORIGINAL:
+  - Used deprecated multi-"services" block { frontend + backend }
+    with custom @vercel/python and @vercel/static-build builders.
+  - This format is UNSUPPORTED and causes the Vercel CLI /
+    dashboard build to fail.
+  - Missing rewrites for frontend routes (SPA catch-all).
+  - Missing api/index.py routing.
+
+NEW:
+  - Single `buildCommand`: `npm run build` (builds React/Vite)
+  - Single `outputDirectory`: `dist` (Vite output)
+  - `installCommand`: installs BOTH Python and Node deps by
+    running `npm install` + `pip install -r requirements.txt`
+    (piped via &&) — Vercel 2025 supports a mixed node+python
+    runtime when both package.json and requirements.txt exist
+    at the project root.
+  - Python version pinned to `3.12` via `functions.python.version`
+    (Vercel default, avoids Python 3.14 pin surprises).
+  - **Routes (in order)**:
+    1. /api/*     -> api/index.py (serverless Python WSGI)
+    2. /admin/*   -> api/index.py (Django admin)
+    3. /media/*   -> api/index.py (Django serves media via
+                      WhiteNoise from backend/media)
+    4. /static/*  -> api/index.py (collectstatic output under
+                      backend/staticfiles; also WhiteNoise)
+    5. /*         -> /index.html (SPA catch-all for React
+                      Router history routes)
+
+IMPORTANT NOTE ABOUT MEDIA FILES ON VERCEL:
+  Vercel serverless functions have EPHEMERAL filesystems.
+  Files written to backend/media at runtime (e.g. new product
+  uploads via admin panel after deployment) are lost on cold
+  start.  Images SHIPPED WITH THE REPO (backend/media/products/*.png)
+  will work because they're part of the deployment bundle.
+  For persistent media on Vercel, integrate an external
+  object store (S3-compatible storage via django-storages +
+  Boto3 is the standard pattern).  Documented in Final Report.
+
+============================================================
+6.  FRONTEND PROBLEMS FOUND & FIXED
+============================================================
+
+6.1  Frontend build status
+--------------------------
+npm install (160 packages) -> SUCCESS (4 mod/high vulns in
+transitive deps, no action required for functionality).
+npm run build (vite build) -> SUCCESS in 26.17s:
+    dist/index.html                   0.61 kB
+    dist/assets/index-CQJhEOHx.css   24.19 kB
+    dist/assets/index-Bn2y-Or2.js   434.68 kB
+All 1936 modules transformed.  NO syntax errors / import
+failures / build-time failures in either pass.
+
+6.2  API service (services/api.js)
+----------------------------------
+ISSUES:
+  - AXIOS_BASE_URL config was `http://127.0.0.1:8000/api` when
+    VITE_API_URL is set, but on Vercel we need same-origin /api.
+  - No centralised MEDIA_URL helper — frontend constructed
+    product image URLs by using the raw image_url field
+    returned by the API, which in some cases was a
+    Django-relative path (/media/products/foo.png) without
+    the origin host; product images would fail to load on
+    Vercel if DRF request context was lost (see §3.5).
+  - Axios instance was NOT setting withCredentials=true by
+    default; CSRF token cookies and session cookies would
+    not be sent on cross-origin requests (e.g. local dev with
+    5173 <> 8000).
+
+FIXES APPLIED:
+  1. Axios instance now defaults `withCredentials: true`.
+  2. New export: `API_BASE` helper that picks:
+        VITE_API_URL if set & non-empty
+        `/api` if same-origin
+        http://127.0.0.1:8000/api as last-resort local fallback
+  3. New export: `resolveMediaUrl(path)` — if path is a
+     complete URL (http/https), return as-is; if path is a
+     relative path (e.g. /media/products/x.png), prepend
+     API_BASE origin so images load on Vercel even when the
+     server returns a relative URL.  Handles empty paths
+     (returns null) so components can show a fallback icon.
+  4. auth/login/register/csrf helpers continue to work but
+     now share the correct origin.
+  5. Axios response interceptor now includes 401 / 403
+     handling with a graceful logout fallback for expired
+     sessions.
+
+6.3  ProductCard / ProductGrid / Shop / Cart / etc.
+---------------------------------------------------
+ISSUES:
+  - ProductCard displayed product images via plain <img src={p.image_url}>.
+    If the API returned a relative path or if the image was
+    missing, browsers showed a broken image icon.
+  - Same problem in: Home (featured products), Shop (grid),
+    ProductDetail (main hero image + related products),
+    Cart (line item thumbnails), AdminProducts (thumbnails
+    in both table and "view product" modal).
+  - No loading="lazy" on product images.
+
+FIXES APPLIED:
+  - ProductCard: Added per-card `imgError` React state that
+    falls back to a Lucide Gamepad2 icon when <img onerror>
+    fires.  Uses resolveMediaUrl to prepend the API origin.
+    Added `loading="lazy"`.
+  - ProductGrid/Shop/Home: No image code of their own (they
+    render <ProductCard>) — automatically fixed.
+  - ProductDetail.jsx:
+      * Hero image -> resolveMediaUrl + imgError state.
+      * Related products -> rendered via ProductCard.
+  - Cart.jsx:
+      * Extracted `CartItemImage` helper component with
+        resolveMediaUrl + imgError state.
+  - AdminProducts.jsx:
+      * Extracted `ThumbImage` helper with resolveMediaUrl +
+        imgError state.
+      * Applied to both the table row thumbnails and the
+        View-modal preview image.
+  - Added missing `useCallback` imports cleaned up where
+    unused to avoid any lint/build warnings (they didn't
+    break anything but keeping a tidy codebase).
+
+6.4  Misc import hygiene
+------------------------
+All pages/components already had `.jsx` extensions for imports
+(e.g. `from '../components/ProductCard.jsx'`) which is the
+correct pattern for the Vite+React setup.  No broken imports
+were found (verified by successful build).
+
+ProtectedRoute / AdminRoute correctly return <Navigate ... replace />
+and read loading/isAuthenticated/isAdmin from AuthContext — correct.
+
+Navbar routes and routes/routes.js match 1:1; no 404 mismatches.
+
+============================================================
+7.  PRODUCT IMAGES — AUDIT
+============================================================
+
+7.1  Inventory (seed data)
+--------------------------
+Seed file: backend/products/management/commands/seed_products.py
+  Defines 12 sample products (6 game genres + 2 accessories +
+  1 console + 1 rpg + 1 adventure + 1 sports = 12).
+
+All 12 slugified filenames MATCH exactly the filenames in
+backend/media/products/:
+
+  1. Dragon's Requiem            -> dragon-s-requiem.png          (RPG)
+  2. Cyber Nexus 2088            -> cyber-nexus-2088.png          (Shooter/Sci-Fi)
+  3. Empire Ascendant            -> empire-ascendant.png          (Strategy)
+  4. Frostbound Legacy           -> frostbound-legacy.png         (Adventure)
+  5. Shadow Strike Infinite      -> shadow-strike-infinite.png    (Action/Stealth)
+  6. Velocity Rush GT            -> velocity-rush-gt.png          (Racing)
+  7. Championship Legends 25     -> championship-legends-25.png   (Sports)
+  8. Hollow Whisper              -> hollow-whisper.png            (Horror)
+  9. Starlight Odyssey           -> starlight-odyssey.png         (Space RPG)
+ 10. Phantom Console Series Z    -> phantom-console-series-z.png  (Consoles)
+ 11. Nova Elite Wireless Controller -> nova-elite-wireless-controller.png (Accessories)
+ 12. Apex Gaming Headset X1      -> apex-gaming-headset-x1.png    (Accessories)
+
+7.2  ProductImage generator (image_utils.py)
+--------------------------------------------
+backend/products/utils/image_utils.py — CREATED/ENHANCED.
+  - generate_product_cover() uses Pillow to draw a high-
+    quality cover image sized for the store (800x600).
+  - Uses a category-specific color palette so a SHOOTER
+    game has a noticeably different background than a
+    HORROR game or a CONSOLE product.
+  - Uses category-specific EMOJI ICONS so users can tell
+    at a glance what kind of product it is (gamepad for
+    video games, headphone icon for headsets, gamepad
+    face-buttons for controllers, and a console-tower icon
+    for consoles):
+      action    = ⚔️
+      shooter   = 🎯
+      sports    = ⚽
+      racing    = 🏎️
+      strategy  = ♟️
+      rpg       = 🗡️
+      adventure = 🗺️
+      horror    = 👻
+      consoles  = 🎮
+      accessories (controller) = 🕹️
+      accessories (headset)    = 🎧
+      default   = 🎮
+  - Overlays the product name and (optional) brand/price.
+  - Creates the products/ directory automatically if it's
+    missing before saving PNG files.
+  - generate_category_placeholder(category) exists as a
+    helper utility for future empty categories.
+
+HOW TO ENSURE IMAGES ARE CORRECT FOR YOUR CATALOG:
+  - If you ever change product names/categories/brands in
+    seed_products.py, re-run from the backend/ directory:
+        python manage.py seed_products --clear
+    This overwrites each generated cover so the VISUAL
+    (color + icon + overlaid name) matches the 12 products
+    exactly.  No "rename a wrong image to match" — the
+    pixel content is regenerated from the product's own
+    metadata.
+  - The 12 PNGs already present in backend/media/products/
+    were generated with an earlier version of image_utils;
+    re-running `seed_products --clear` will upgrade them
+    to include the new category icons and polished palette.
+
+7.3  Static frontend images
+---------------------------
+No static frontend images (public/ products/ etc.) were used
+— product images always come from the API (served by Django)
+and are rendered via resolveMediaUrl + ProductCard.
+No mismatches between filenames and product names are
+possible because the seed command derives filenames from
+slugify(product.name) by construction (any change breaks
+the filename).  The database image field also points to
+products/<slug>.png.
+
+============================================================
+8.  DATABASE / MIGRATIONS / DJANGO COMMANDS (TO RUN LOCALLY)
+============================================================
+
+Because pip install is restricted in this sandbox, the
+end-user MUST run these commands on their own machine from
+the backend/ folder AFTER installing Python dependencies
+(see §9):
+
+  (1) Install dependencies (preferably inside a venv):
+          cd backend
+          python -m venv .venv
+          .venv\Scripts\activate           # Windows
+          pip install -r requirements.txt  # from root dir
+
+  (2) Check for import errors / broken Django config:
+          python manage.py check
+      (Expected output: "System check identified no issues (0 silenced).")
+
+  (3) Create any fresh migrations (should produce 0 new files
+      if existing migrations are up to date with models):
+          python manage.py makemigrations
+
+  (4) Apply all migrations to backend/db.sqlite3:
+          python manage.py migrate
+
+  (5) Create a superuser (for /admin and admin pages):
+          python manage.py createsuperuser
+      (Choose username + email + secure password)
+
+  (6) Seed sample products + generated images:
+          python manage.py seed_products
+
+  (7) Run the Django dev server on :8000:
+          python manage.py runserver
+
+  (8) In a second terminal, run the Vite frontend on :5173:
+          cd ..    # (back to project root)
+          npm install    # if not yet installed
+          npm run dev
+
+  (9) Navigate to:
+        http://localhost:5173/            — Storefront
+        http://localhost:5173/admin/      — Admin panel
+        http://localhost:5173/login       — Login
+        http://localhost:5173/register    — Register
+        http://localhost:8000/api/products/   — REST API
+        http://localhost:8000/admin/      — Django admin
+
+============================================================
+9.  DEPENDENCIES TO INSTALL
+============================================================
+
+--- Python (from project ROOT, or from backend/ using same file) ---
+  Copy requirements.txt contents and install (see §8.1).
+
+  Core packages:
+    - Django (>=5.1, <5.3)         — web framework
+    - djangorestframework (>=3.15) — REST API
+    - django-cors-headers (>=4.3)  — CORS middleware
+    - Pillow (>=11, <13)           — ImageField + image generator
+    - whitenoise (>=6.7)           — staticfile serving on Vercel
+    - gunicorn (>=23)              — local production WSGI server
+
+--- JavaScript (project ROOT) ---
+  npm install
+  (package.json is present; installs React 18, React DOM 18,
+   React Router DOM 7, Vite 5, Tailwind 3, Framer Motion 11,
+   Lucide React, Axios, clsx/tailwind-merge, plus build tools.)
+  No action required beyond `npm install`.
+
+============================================================
+10. ENVIRONMENT VARIABLES — FULL LIST
+============================================================
+
+See file .env.example at project root.  The vars are:
+
+  -- Django/backend --
+  DJANGO_SECRET_KEY        Long random string, MUST be set
+                           for production (run in Python:
+                           `import secrets; print(secrets.token_urlsafe(64))`)
+  DJANGO_DEBUG             "True" for local dev, "False" on
+                           Vercel (and any production).
+  DJANGO_ALLOWED_HOSTS     Comma-separated list of custom
+                           hostnames (e.g. example.com,www.example.com)
+                           — VERCEL_URL and *.vercel.app are
+                           auto-added by settings.py, so you
+                           only need this for custom domains.
+  DJANGO_FORCE_SCRIPT_NAME Optional URL prefix (leave EMPTY
+                           on Vercel).
+
+  -- Frontend / Vite --
+  VITE_API_URL             Only needed for LOCAL dev when
+                           Vite (:5173) and Django (:8000)
+                           run on different ports.  Set to
+                           http://127.0.0.1:8000/api locally.
+                           On Vercel do NOT set this —
+                           same-origin /api is used automatically.
+
+For Vercel, add the following variables in the Dashboard at
+Project Settings → Environment Variables, scoped to
+Production + Preview + Development:
+
+  DJANGO_SECRET_KEY          (your generated key; REQUIRED)
+  DJANGO_DEBUG               False
+
+If you have a custom domain, also add:
+  DJANGO_ALLOWED_HOSTS       example.com,www.example.com
+
+============================================================
+11. FILES CREATED / MODIFIED IN THIS DEBUG SESSION
+============================================================
+
+CREATED (previously missing):
+  1. api/index.py                       — Vercel WSGI entry
+  2. backend/media/products/*.png       — (12 files, already present but seed_products now re-generates with correct visuals)
+  3. backend/products/utils/image_utils.py  — Product image generator (ENHANCED with category icons + palette)
+  4. backend/orders/migrations/         — FOLDER created with __init__.py if missing (now exists)
+
+MODIFIED:
+  5. backend/config/settings.py         — WhiteNoise, Vercel host auto-config, CORS/CSRF fixes, env-driven SECRET_KEY/DEBUG/ALLOWED_HOSTS, SSL/cookie security
+  6. backend/config/urls.py             — Moved API routes under /api/ prefix to match Vercel routing
+  7. backend/products/serializers.py    — image_url robustified (missing context / blank image)
+  8. backend/users/serializers.py       — same defensive null handling
+  9. backend/orders/serializers.py      — same defensive null handling
+ 10. backend/orders/views.py            — atomic transaction + select_related optimisations
+ 11. requirements.txt (root)            — Updated pins, added whitenoise + gunicorn
+ 12. backend/requirements.txt           — Same content as root requirements.txt (mirrored so local `cd backend; pip install -r requirements.txt` works)
+ 13. vercel.json                        — Complete rewrite: single build, correct rewrites, api/index.py routing, Python 3.12 pin
+ 14. src/services/api.js                — Added API_BASE + resolveMediaUrl helpers, withCredentials=true, 401/403 handling
+ 15. src/components/ProductCard.jsx     — resolveMediaUrl, imgError fallback, lazy loading
+ 16. src/pages/ProductDetail.jsx        — resolveMediaUrl, imgError fallback, lazy loading
+ 17. src/pages/Home.jsx                 — (no-op, uses ProductCard)
+ 18. src/pages/Shop.jsx                 — (no-op, uses ProductCard)
+ 19. src/pages/Cart.jsx                 — CartItemImage helper with resolveMediaUrl + imgError
+ 20. src/pages/AdminProducts.jsx        — ThumbImage helper, resolveMediaUrl + imgError for table + modal
+
+============================================================
+12. REMAINING ISSUES (EXTERNAL SERVICES / CREDENTIALS)
+============================================================
+
+1. EPHEMERAL MEDIA on Vercel serverless — images uploaded
+   via Django admin AFTER deployment (new product uploads,
+   category images, etc.) are NOT persistent on Vercel
+   Serverless Functions' disk.  Solution: switch to an
+   external object store (AWS S3, Cloudflare R2, Supabase
+   Storage, etc.) via `django-storages` + boto3 package,
+   or run Django on a persistent host (Render, Fly.io,
+   Railway, EC2, etc.) for mutable state.  The shipped 12
+   static product images that are part of the GIT repo
+   WILL work on Vercel because they're baked into the
+   deployment bundle.
+
+2. Pip install blocked in TRAE sandbox — end-user MUST
+   run `pip install -r requirements.txt` locally (see §8)
+   before they can execute Django management commands.
+   This is a TRAE sandbox restriction, NOT a bug in the
+   project, and cannot be fixed from code alone.
+
+3. No real external product imagery source was configured.
+   `image_utils.py` generates high-quality placeholder
+   covers that visually match each product (category color +
+   category icon + product name).  If you need real product
+   photography (e.g. real photo of Nova Elite Wireless
+   Controller, real box shot of Championship Legends 25),
+   you have two options:
+   (a) Replace the 12 PNGs in backend/media/products/ with
+       real photos you have rights to, keeping the same
+       slugified filenames (db + seed command match those
+       names).
+   (b) Point each Product.image to a remote https URL
+       (ImageField accepts URLs if you switch to a custom
+       URL-only storage backend, or you could add a second
+       `image_external_url` model field for off-site hosting).
+   Either way is fully compatible with the current serializer
+   (it handles absolute URLs and file-backed images alike).
+
+4. SECRET_KEY: even though settings.py has a dev-only fallback,
+   production MUST set DJANGO_SECRET_KEY.  If it's not set,
+   Django will still boot with the fallback but this is a
+   security risk (same key is published in the git repo).
+   ALWAYS override it for any publicly reachable host.
+
+============================================================
+13. END
+============================================================

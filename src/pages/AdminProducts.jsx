@@ -5,9 +5,24 @@ import {
   ChevronLeft, ChevronRight, LayoutDashboard,
 } from 'lucide-react'
 import { AdminNav } from './AdminDashboard.jsx'
-import { getProducts, createProduct, updateProduct, deleteProduct } from '../services/api.js'
+import { getProducts, createProduct, updateProduct, deleteProduct, resolveMediaUrl } from '../services/api.js'
 import Modal from '../components/Modal.jsx'
 import Loading from '../components/Loading.jsx'
+
+const ThumbImage = ({ src, alt }) => {
+  const [imgError, setImgError] = useState(false)
+  const resolved = !imgError ? resolveMediaUrl(src) : null
+  if (!resolved) return <Gamepad2 className="w-5 h-5 text-gaming-border" />
+  return (
+    <img
+      src={resolved}
+      alt={alt}
+      loading="lazy"
+      onError={() => setImgError(true)}
+      className="w-full h-full object-cover"
+    />
+  )
+}
 
 const CATEGORY_CHOICES = ['action', 'adventure', 'rpg', 'shooter', 'sports', 'racing', 'strategy', 'horror', 'accessories', 'consoles']
 const PLATFORM_CHOICES = ['pc', 'ps5', 'ps4', 'xbox', 'switch', 'multi']
@@ -200,11 +215,7 @@ const AdminProducts = () => {
                   <tr key={p.id} className="border-b border-gaming-border/50 hover:bg-gaming-surface/40 transition-colors">
                     <td className="px-4 py-3">
                       <div className="w-12 h-12 rounded-lg overflow-hidden bg-gaming-surface flex items-center justify-center">
-                        {p.image_url ? (
-                          <img src={p.image_url} alt={p.name} className="w-full h-full object-cover" />
-                        ) : (
-                          <Gamepad2 className="w-5 h-5 text-gaming-border" />
-                        )}
+                        <ThumbImage src={p.image_url || p.image} alt={p.name} />
                       </div>
                     </td>
                     <td className="px-4 py-3 text-white font-medium max-w-[200px] truncate">{p.name}</td>
@@ -338,11 +349,7 @@ const AdminProducts = () => {
         {viewTarget && (
           <div className="space-y-3 text-sm">
             <div className="w-full aspect-video rounded-lg overflow-hidden bg-gaming-surface flex items-center justify-center mb-4">
-              {viewTarget.image_url ? (
-                <img src={viewTarget.image_url} alt={viewTarget.name} className="w-full h-full object-cover" />
-              ) : (
-                <Gamepad2 className="w-12 h-12 text-gaming-border" />
-              )}
+              <ThumbImage src={viewTarget.image_url || viewTarget.image} alt={viewTarget.name} />
             </div>
             <p><span className="text-gray-500">Name:</span> <span className="text-white">{viewTarget.name}</span></p>
             <p><span className="text-gray-500">Description:</span> <span className="text-white">{viewTarget.description}</span></p>

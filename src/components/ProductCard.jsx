@@ -1,17 +1,21 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Star, ShoppingCart, Eye, Gamepad2 } from 'lucide-react'
 import { useCart } from '../context/CartContext.jsx'
+import { resolveMediaUrl } from '../services/api.js'
 
 const ProductCard = ({ product }) => {
   const { addToCart } = useCart()
+  const [imgError, setImgError] = useState(false)
 
   const handleAdd = (e) => {
     e.preventDefault()
     e.stopPropagation()
     addToCart(product, 1)
   }
+
+  const imgSrc = !imgError ? resolveMediaUrl(product.image_url || product.image) : null
 
   return (
     <motion.div
@@ -21,10 +25,12 @@ const ProductCard = ({ product }) => {
     >
       <Link to={`/product/${product.id}`} className="block">
         <div className="relative aspect-[4/3] bg-gaming-surface overflow-hidden">
-          {product.image_url ? (
+          {imgSrc ? (
             <img
-              src={product.image_url}
+              src={imgSrc}
               alt={product.name}
+              loading="lazy"
+              onError={() => setImgError(true)}
               className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
             />
           ) : (

@@ -1,6 +1,31 @@
 import axios from 'axios'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api'
+const isProduction = typeof window !== 'undefined' &&
+  window.location.hostname !== 'localhost' &&
+  window.location.hostname !== '127.0.0.1'
+
+let defaultBaseURL
+if (typeof window !== 'undefined' && isProduction) {
+  defaultBaseURL = '/api'
+} else {
+  defaultBaseURL = 'http://127.0.0.1:8000/api'
+}
+
+const API_URL = import.meta.env.VITE_API_URL || defaultBaseURL
+
+export function resolveMediaUrl(url) {
+  if (!url) return null
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
+    return url
+  }
+  if (url.startsWith('//')) return window.location.protocol + url
+  if (url.startsWith('/media/') || url.startsWith('/static/')) {
+    if (isProduction) return url
+    const backendOrigin = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000').replace(/\/api\/?$/, '')
+    return backendOrigin + url
+  }
+  return url
+}
 
 const api = axios.create({
   baseURL: API_URL,

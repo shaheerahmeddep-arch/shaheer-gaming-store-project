@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Star, Minus, Plus, ShoppingCart, ArrowLeft, Gamepad2, CheckCircle2, XCircle } from 'lucide-react'
 import { getProduct, getProducts } from '../services/api.js'
+import { resolveMediaUrl } from '../services/api.js'
 import { useCart } from '../context/CartContext.jsx'
 import Loading from '../components/Loading.jsx'
 import ProductGrid from '../components/ProductGrid.jsx'
@@ -18,6 +19,7 @@ const ProductDetails = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [added, setAdded] = useState(false)
+  const [imgError, setImgError] = useState(false)
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -25,6 +27,7 @@ const ProductDetails = () => {
       setError(null)
       setAdded(false)
       setQuantity(1)
+      setImgError(false)
       try {
         const res = await getProduct(id)
         setProduct(res.data)
@@ -72,8 +75,13 @@ const ProductDetails = () => {
           animate={{ opacity: 1, x: 0 }}
           className="rounded-2xl overflow-hidden border border-gaming-border bg-gaming-card aspect-square flex items-center justify-center"
         >
-          {product.image_url ? (
-            <img src={product.image_url} alt={product.name} className="w-full h-full object-cover" />
+          {!imgError && (product.image_url || product.image) ? (
+            <img
+              src={resolveMediaUrl(product.image_url || product.image)}
+              alt={product.name}
+              onError={() => setImgError(true)}
+              className="w-full h-full object-cover"
+            />
           ) : (
             <Gamepad2 className="w-32 h-32 text-gaming-border" />
           )}

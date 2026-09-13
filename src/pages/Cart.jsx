@@ -4,7 +4,22 @@ import { motion } from 'framer-motion'
 import { Minus, Plus, Trash2, ShoppingCart, Gamepad2, ArrowRight } from 'lucide-react'
 import { useCart } from '../context/CartContext.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
-import { createOrder } from '../services/api.js'
+import { createOrder, resolveMediaUrl } from '../services/api.js'
+
+const CartItemImage = ({ item }) => {
+  const [imgError, setImgError] = useState(false)
+  const src = !imgError ? resolveMediaUrl(item.image_url) : null
+  if (!src) return <Gamepad2 className="w-8 h-8 text-gaming-border" />
+  return (
+    <img
+      src={src}
+      alt={item.name}
+      loading="lazy"
+      onError={() => setImgError(true)}
+      className="w-full h-full object-cover"
+    />
+  )
+}
 
 const Cart = () => {
   const { items, increaseQuantity, decreaseQuantity, removeFromCart, totalPrice, clearCart } = useCart()
@@ -85,11 +100,7 @@ const Cart = () => {
               className="flex items-center gap-4 glass border border-gaming-border rounded-xl p-4"
             >
               <div className="w-20 h-20 rounded-lg overflow-hidden bg-gaming-surface flex-shrink-0 flex items-center justify-center">
-                {item.image_url ? (
-                  <img src={item.image_url} alt={item.name} className="w-full h-full object-cover" />
-                ) : (
-                  <Gamepad2 className="w-8 h-8 text-gaming-border" />
-                )}
+                <CartItemImage item={item} />
               </div>
               <div className="flex-1 min-w-0">
                 <Link to={`/product/${item.id}`} className="font-display font-semibold text-white hover:text-gaming-neon transition-colors line-clamp-1">
