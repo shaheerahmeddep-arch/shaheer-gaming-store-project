@@ -3,28 +3,5 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-      "includeFiles": "backend/**"
-  "installCommand": "npm install && pip install -r backend/requirements.txt",
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/index.py"
-    },
-    {
-      "source": "/admin/(.*)",
-      "destination": "/api/index.py"
-    },
-    {
-      "source": "/media/(.*)",
-      "destination": "/api/index.py"
-    },
-    {
-      "source": "/staticfiles/(.*)",
-      "destination": "/api/index.py"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
-    }
-  ]
+  "installCommand": "npm install && pip install -r backend/requirements.txt"
 }
