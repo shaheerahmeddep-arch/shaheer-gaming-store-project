@@ -1,8 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
-  "installCommand": "npm install && pip install --upgrade pip && pip install -r requirements.txt",
-  "buildCommand": "cd backend && python manage.py collectstatic --noinput && cd .. && npm run build",
+  "installCommand": "npm config set allow-scripts true && npm install --include=optional && python -m venv .venv-vercel && . .venv-vercel/bin/activate && pip install --upgrade pip && pip install -r requirements.txt && deactivate",
+  "buildCommand": ". .venv-vercel/bin/activate && cd backend && python manage.py collectstatic --noinput && cd .. && npm run build && deactivate",
   "outputDirectory": "dist",
   "functions": {
     "api/index.py": {
