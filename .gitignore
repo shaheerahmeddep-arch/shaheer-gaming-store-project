@@ -1,3 +1,15 @@
 node_modules
+dist
 
 .env
+.venv
+venv
+__pycache__/
+*.pyc
+*.pyo
+
+backend/.deps
+backend/staticfiles
+backend/db.sqlite3-journal
+debug.log
+.DS_Store

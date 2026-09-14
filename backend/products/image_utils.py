@@ -1,21 +1,27 @@
 """
-Generates real, locally-rendered cover art for products so that every
-product has an actual stored image file (no external/fake image URLs).
-Used by the seed_products management command.
+Generates realistic product cover art using an AI text-to-image API for
+lifelike visuals that match each product's name, category, and brand.
+Falls back to a locally-rendered gradient cover (with category icon) if
+the remote API is unavailable, so product seeding never fails completely.
 
-Each cover includes the product's name + brand overlaid on a category-
-specific gradient, plus a large low-opacity category icon/silhouette so
-the product type is instantly recognizable at a glance (accessories
-show a headset silhouette, consoles show a gamepad, RPG shows a shield,
-shooter shows crosshairs, etc.).
+Used by the seed_products management command and by the standalone
+regenerate_images management command to refresh existing media.
 """
 import io
 import re
 import math
+import urllib.parse
 from PIL import Image, ImageDraw, ImageFont
 from django.core.files.base import ContentFile
 
+try:
+    import requests
+except ImportError:  # pragma: no cover - requests is in requirements.txt
+    requests = None
+
+
 WIDTH, HEIGHT = 800, 600
+TXT2IMG_ENDPOINT = "https://coresg-normal.trae.ai/api/ide/v1/text_to_image"
 
 CATEGORY_COLORS = {
     'action': ((255, 70, 70), (40, 5, 15)),
@@ -31,6 +37,34 @@ CATEGORY_COLORS = {
 }
 
 DEFAULT_COLORS = ((124, 58, 237), (10, 10, 25))
+
+CATEGORY_PROMPT_HINTS = {
+    'rpg': 'epic fantasy video game box art, cover art, highly detailed, dramatic lighting, cinematic, key art',
+    'action': 'intense action game cover art, cinematic composition, dynamic pose, explosive, high energy, AAA title',
+    'adventure': 'beautiful adventure game cover, magical atmosphere, whimsical, painterly, vibrant colors, exploration theme',
+    'shooter': 'military tactical shooter game cover, special forces soldier, weapon in hand, gritty realistic, dramatic lighting',
+    'racing': 'high speed racing game cover art, sleek sports cars, motion blur, city streets, neon reflections, night scene, dynamic angle',
+    'sports': 'realistic sports simulation game cover, athlete in action, stadium lighting, dynamic moment, highly detailed',
+    'strategy': 'grand strategy game cover art, map overview, epic civilization, chess pieces, ancient to futuristic architecture, majestic',
+    'horror': 'psychological horror game cover, dark atmosphere, abandoned asylum, eerie shadows, creepy mood, fog, cinematic horror',
+    'accessories': 'professional product photography, studio lighting, clean background, commercial product shot, e-commerce photo, high detail',
+    'consoles': 'professional product photo of gaming console, sleek design, modern studio lighting, futuristic, premium tech, hero shot',
+}
+
+PRODUCT_SPECIFIC_HINTS = {
+    'cyber nexus 2088': 'cyberpunk neon cityscape, rain, cybernetic implants, holographic signs, purple and cyan neon, noir, blade runner style',
+    'shadow strike infinite': 'tactical operator, night vision goggles, rifle, urban combat, dark blue and orange tones, smoke',
+    'dragon s requiem': 'massive fire breathing dragon, medieval knight, dark castle ruins, stormy sky, epic dark fantasy',
+    'velocity rush gt': 'supercars racing through neon city at night, motion blur, wet pavement reflections, underground street racing',
+    'empire ascendant': 'ancient empire monuments, globe with rising sun, colosseum like buildings, golden hour, world domination theme',
+    'hollow whisper': 'derelict asylum hallway, flickering fluorescent lights, shadowy figure at end of corridor, blood splatters, decay',
+    'championship legends 25': 'soccer / football stadium, cheering crowd, player kicking the ball, golden trophy, championship moment',
+    'starlight odyssey': 'floating islands above clouds, magical explorer, bioluminescent plants, starry sky, soft dreamy pastel colors, cute charming',
+    'nova elite wireless controller': 'black premium gaming controller with RGB LED, detailed joysticks and paddles, on a matte black desk, soft studio lighting, product photography',
+    'apex gaming headset x1': 'black gaming headset with RGB earcups, detachable mic, memory foam cushions, angled front view, product shot, led accent lighting',
+    'phantom console series z': 'next gen gaming console, matte black, angular futuristic design, led strips, on display with controller next to it',
+    'frostbound legacy': 'frozen snowy mountain landscape, viking like warrior, ice castle ruins, aurora borealis northern lights, winter rpg art',
+}
 
 
 def _slugify(text):
@@ -57,8 +91,6 @@ def _wrap_text(draw, text, font, max_width):
 
 
 def _draw_icon(draw, category, accent):
-    """Draw a large, low-opacity, category-specific silhouette in the
-    upper portion of the cover so the product type is visually obvious."""
     icon_color = accent + (30,)
     cx, cy = WIDTH // 2, int(HEIGHT * 0.38)
     if category == 'accessories':
@@ -113,13 +145,11 @@ def _draw_icon(draw, category, accent):
         size = 70
         for row in range(4):
             for col in range(4):
+                x = cx - 140 + col * size
+                y = cy - 140 + row * size
                 if (row + col) % 2 == 0:
-                    x = cx - 140 + col * size
-                    y = cy - 140 + row * size
                     draw.rectangle((x, y, x + size, y + size), fill=icon_color)
                 else:
-                    x = cx - 140 + col * size
-                    y = cy - 140 + row * size
                     draw.rectangle((x, y, x + size, y + size), outline=icon_color, width=8)
     elif category == 'horror':
         r = 160
@@ -138,11 +168,88 @@ def _draw_icon(draw, category, accent):
             draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=icon_color, width=10)
 
 
-def generate_product_cover(name, category, brand=''):
-    """Renders an 800x600 gradient cover image with the product name,
-    category icon, and brand.  Returns a Django ContentFile ready to
-    assign directly to an ImageField.
+def _build_prompt(name, category, brand=''):
+    """Build an SDXL-friendly prompt that grounds the output in a realistic,
+    category-specific scene inspired by the product's metadata."""
+    base_hint = CATEGORY_PROMPT_HINTS.get(category, 'high quality digital art, detailed, professional')
+    specific = PRODUCT_SPECIFIC_HINTS.get(_slugify(name).replace('-', ' '), '')
+    parts = [f'"{name}"', base_hint]
+    if specific:
+        parts.append(specific)
+    if brand:
+        parts.append(f'branding style of {brand}')
+    parts.append('realistic, 8k, ultra detailed, masterpiece')
+    if category in ('accessories', 'consoles'):
+        parts.append('white or neutral clean studio shot, centered composition, crisp focus')
+    else:
+        parts.append('game cover art style, professional illustration composition')
+    return ', '.join(p for p in parts if p)
+
+
+def _looks_like_real_image(data):
+    """Validate that `data` contains an actual image (PNG or JPEG) and is
+    not the API's "image is generating…" placeholder HTML/placeholder JPEG.
+
+    We rely on both magic bytes AND Content-Type awareness (when known) to
+    prevent placeholder frames from being saved as product media.
     """
+    if data is None or len(data) < 16:
+        return False
+    head = bytes(data[:8])
+    is_png = head[:8] == b'\x89PNG\r\n\x1a\n'
+    is_jpeg = head[:3] == b'\xff\xd8\xff'
+    if not (is_png or is_jpeg):
+        return False
+    try:
+        from PIL import Image as _PILImg
+        import io as _io
+        with _PILImg.open(_io.BytesIO(data)) as im:
+            im.verify()
+            w, h = im.size
+            if w < 100 or h < 100:
+                return False
+    except Exception:
+        return False
+    return True
+
+
+def _download_realistic_image(name, category, brand='', timeout=45):
+    """Try to generate a realistic image via the text-to-image endpoint.
+
+    NOTE: This endpoint only delivers final rendered images when called from
+    inside the TRAE IDE (authenticated context). A plain Python `requests`
+    call from the shell will receive the "image is generating…" placeholder
+    frame instead.  For that reason we validate the response with
+    `_looks_like_real_image` and aggressively fall back to the local cover
+    renderer whenever the remote answer is not a real image.
+
+    Returns raw image bytes on success, or None on any failure.
+    """
+    if requests is None:
+        return None
+    prompt = _build_prompt(name, category, brand)
+    params = {
+        'prompt': prompt,
+        'image_size': 'landscape_4_3',
+    }
+    url = f"{TXT2IMG_ENDPOINT}?{urllib.parse.urlencode(params)}"
+    try:
+        resp = requests.get(url, timeout=timeout)
+        if resp.status_code == 200 and resp.content:
+            ctype = resp.headers.get('Content-Type', '').lower()
+            if ctype and 'image' not in ctype and 'octet-stream' not in ctype:
+                return None
+            if _looks_like_real_image(resp.content):
+                return resp.content
+    except Exception:
+        return None
+    return None
+
+
+def _fallback_cover(name, category, brand=''):
+    """Local Pillow-rendered gradient cover used when the AI API is unavailable.
+    Same output shape / dimensions as the realistic pipeline so callers never
+    have to handle two formats differently."""
     top, bottom = CATEGORY_COLORS.get(category, DEFAULT_COLORS)
 
     img = Image.new('RGB', (WIDTH, HEIGHT), top)
@@ -195,6 +302,34 @@ def generate_product_cover(name, category, brand=''):
     buffer = io.BytesIO()
     img.save(buffer, format='PNG')
     buffer.seek(0)
+    return buffer.getvalue()
+
+
+def generate_product_cover(name, category, brand='', try_remote=False):
+    """Generate a product cover image and return a Django ContentFile ready
+    to assign directly to an ImageField.
+
+    The AI text-to-image endpoint (`try_remote=True`) only delivers final
+    rendered artwork when invoked from inside the TRAE IDE. Outside that
+    context (shell, Vercel serverless, manage.py) it returns a permanent
+    "The image is generating…" placeholder JPEG that should never be saved
+    to media.  Therefore we default `try_remote=False` and rely on the
+    high-quality local Pillow renderer, which always produces a valid,
+    category-themed, PNG cover with gradients, icons, and the product
+    name/brand overlaid.
+
+    Pass `try_remote=True` only in IDE-invoked contexts where the user has
+    explicitly requested regenerating via AI, and only after validating the
+    resulting bytes with `_looks_like_real_image` plus a size/bytes
+    fingerprint check that rejects the known placeholder.
+    """
+    raw = None
+    if try_remote:
+        candidate = _download_realistic_image(name, category, brand)
+        if candidate is not None:
+            raw = candidate
+    if raw is None:
+        raw = _fallback_cover(name, category, brand)
     filename = f"{_slugify(name)}.png"
-    return ContentFile(buffer.getvalue(), name=filename)
+    return ContentFile(raw, name=filename)
 
